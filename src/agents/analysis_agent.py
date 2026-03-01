@@ -54,3 +54,46 @@ class AnalysisAgent:
             check_only: If True, only check rate limit without generating analysis
             chat_history: Previous messages in the current session (optional)
         """
+
+        can_analyze, error_msg = self.check_rate_limit()
+        if not can_analyze:
+            return {"success": False, "error": error_msg}
+        
+        if check_only:
+            return can_analyze, error_msg
+        
+        # Process data before sending to model
+        processed_data = self._preprocess_data(data)
+        
+        # Enhance prompt with in-context learning (only if chat_history is provided)
+        enhanced_prompt = self._build_enhanced_prompt(system_prompt, processed_data, chat_history) if chat_history else system_prompt
+        
+        # Generate analysis using model manager
+        result = self.model_manager.generate_analysis(processed_data, enhanced_prompt)
+        
+        if result["success"]:
+            # Update analytics and learning systems
+            self._update_analytics(result)
+            self._update_knowledge_base(processed_data, result["content"])
+        
+        return result
+    
+    def _update_analytics(self, result):
+        """Update analytics after successful analysis."""
+        st.session_state.analysis_count += 1
+        st.session_state.last_analysis = datetime.now()
+        
+        # Track which models are being used
+        model_used = result.get("model_used", "unknown")
+        if model_used in st.session_state.models_used:
+            st.session_state.models_used[model_used] += 1
+        else:
+            st.session_state.models_used[model_used] = 1
+    
+    def _update_knowledge_base(self, data, analysis):
+        """
+        Update knowledge base with new analysis results for in-context learning.
+        Maps key health indicators to analysis patterns.
+        """
+        if not isinstance(data, dict) or 'report' not in data:
+            return
