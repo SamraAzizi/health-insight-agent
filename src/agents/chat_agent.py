@@ -35,6 +35,7 @@ class ChatAgent:
         for msg in chat_history:
             messages.append({"role": msg["role"], "content": msg["content"]})
         return messages
+
     def _contextualize_query(self, query, chat_history):
         """Reformulate query considering chat history."""
         if not chat_history:
@@ -85,3 +86,55 @@ Standalone Question:"""
 
         # 2. Retrieve relevant documents
         try:
+            retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+            docs = retriever.get_relevant_documents(contextualized_query)
+            context = "\n\n".join([doc.page_content for doc in docs])
+
+            # If context is just placeholder text, set to empty
+            if context.strip() == "No report context available.":
+                context = ""
+        except Exception:
+            # If retrieval fails, proceed without context
+            context = ""
+
+        # 3. Build prompt with context and chat history
+        qa_system_prompt = (
+            "You are an assistant for question-answering tasks. "
+            "Use the following pieces of retrieved context to answer the question. "
+            "If you don't know the answer, just say that you don't know. "
+            "Use three sentences maximum and keep the answer concise."
+        )
+
+        # Format messages for Groq API
+        messages = [{"role": "system", "content": qa_system_prompt}]
+
+        # Add chat history
+        if chat_history:
+            formatted_history = self._format_chat_history(
+                chat_history[-6:]
+            )  # Last 3 exchanges
+            messages.extend(formatted_history)
+
+        # Add context and current query
+        if (
+            context
+            and context.strip()
+            and context.strip() != "No report context available."
+        ):
+            user_message = f"Context:\n{context}\n\nQuestion: {query}"
+        else:
+            # No report context available, rely on chat history only
+            user_message = f"Question: {query}\n\nNote: No report context is available. Please answer based on the chat history."
+        messages.append({"role": "user", "content": user_message})
+
+        # 4. Get response from Groq
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=500,
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"Error generating response: {str(e)}"
