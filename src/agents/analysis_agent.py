@@ -119,3 +119,103 @@ class AnalysisAgent:
                     
                     if patient_profile not in st.session_state.knowledge_base[indicator]:
                         st.session_state.knowledge_base[indicator][patient_profile] = []
+                    
+                    # Extract the relevant section from analysis (simple approach)
+                    lines = analysis.split('\n')
+                    relevant_lines = [l for l in lines if indicator in l.lower()]
+                    if relevant_lines:
+                        # Limit knowledge base size to prevent overflow
+                        if len(st.session_state.knowledge_base[indicator][patient_profile]) >= 3:
+                            st.session_state.knowledge_base[indicator][patient_profile].pop(0)
+                        st.session_state.knowledge_base[indicator][patient_profile].append(relevant_lines[0])
+    
+    def _build_enhanced_prompt(self, system_prompt, data, chat_history):
+        """
+        Build an enhanced prompt using in-context learning from:
+        1. Knowledge base of previous analyses
+        2. Current session chat history
+        """
+        enhanced_prompt = system_prompt
+        
+        # Add in-context learning from knowledge base
+        if isinstance(data, dict) and 'report' in data:
+            kb_context = self._get_knowledge_base_context(data)
+            if kb_context:
+                enhanced_prompt += "\n\n## Relevant Learning From Previous Analyses\n" + kb_context
+        
+        # Add session context from chat history
+        if chat_history:
+            session_context = self._get_session_context(chat_history)
+            if session_context:
+                enhanced_prompt += "\n\n## Current Session History\n" + session_context
+        
+        return enhanced_prompt
+    
+    def _get_knowledge_base_context(self, data):
+        """Extract relevant context from knowledge base."""
+        if 'knowledge_base' not in st.session_state or not st.session_state.knowledge_base:
+            return ""
+            
+        report_text = data.get('report', '').lower()
+        patient_profile = f"{data.get('age', 'unknown')}-{data.get('gender', 'unknown')}"
+        
+        context_items = []
+        
+        # Find relevant knowledge from previous analyses
+        for indicator, profiles in st.session_state.knowledge_base.items():
+            if indicator in report_text:
+                # Get insights from similar patient profiles first
+                if patient_profile in profiles:
+                    for insight in profiles[patient_profile]:
+                        context_items.append(f"- {indicator} (similar patient profile): {insight}")
+                
+                # Then get general insights
+                for profile, insights in profiles.items():
+                    if profile != patient_profile:
+                        for insight in insights:
+                            context_items.append(f"- {indicator} (other patient profile): {insight}")
+        
+        # Limit context size
+        if len(context_items) > 5:
+            context_items = context_items[:5]
+            
+        return "\n".join(context_items) if context_items else ""
+    
+    def _get_session_context(self, chat_history):
+        """Extract relevant context from current session."""
+        if not chat_history or len(chat_history) < 2:
+            return ""
+            
+        # Get the last few message pairs (up to 2)
+        context_items = []
+        for i in range(len(chat_history) - 1, 0, -2):
+            if i >= 1 and chat_history[i-1]['role'] == 'user' and chat_history[i]['role'] == 'assistant':
+                user_msg = chat_history[i-1]['content']
+                ai_msg = chat_history[i]['content']
+                
+                # Keep only the first 200 chars of each message to avoid token explosion
+                if len(user_msg) > 200:
+                    user_msg = user_msg[:197] + "..."
+                if len(ai_msg) > 200:
+                    ai_msg = ai_msg[:197] + "..."
+                    
+                context_items.append(f"User: {user_msg}\nAssistant: {ai_msg}")
+                
+                # Limit to last 2 exchanges
+                if len(context_items) >= 2:
+                    break
+                    
+        return "\n\n".join(reversed(context_items)) if context_items else ""
+    
+    def _preprocess_data(self, data):
+        """Pre-process data before sending to model."""
+        if isinstance(data, dict):
+            # Extract only necessary information to reduce token usage
+            processed = {
+                "patient_name": data.get("patient_name", ""),
+                "age": data.get("age", ""),
+                "gender": data.get("gender", ""),
+                "report": data.get("report", "")
+            }
+            return processed
+        return data
