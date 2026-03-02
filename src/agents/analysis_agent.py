@@ -24,7 +24,7 @@ class AnalysisAgent:
             st.session_state.models_used = {}
         if 'knowledge_base' not in st.session_state:
             st.session_state.knowledge_base = {}
-
+            
     def check_rate_limit(self):
         """Check if user has reached their analysis limit."""
         # Calculate time until reset
@@ -54,7 +54,6 @@ class AnalysisAgent:
             check_only: If True, only check rate limit without generating analysis
             chat_history: Previous messages in the current session (optional)
         """
-
         can_analyze, error_msg = self.check_rate_limit()
         if not can_analyze:
             return {"success": False, "error": error_msg}
@@ -97,3 +96,26 @@ class AnalysisAgent:
         """
         if not isinstance(data, dict) or 'report' not in data:
             return
+            
+        # Extract key health indicators and map them to analysis outcomes
+        # This basic implementation can be expanded with more sophisticated extraction
+        report_text = data['report'].lower()
+        patient_profile = f"{data.get('age', 'unknown')}-{data.get('gender', 'unknown')}"
+        
+        # Look for key health indicators in the report
+        key_indicators = [
+            "hemoglobin", "glucose", "cholesterol", "triglycerides", 
+            "hdl", "ldl", "wbc", "rbc", "platelet", "creatinine"
+        ]
+        
+        # Store snippets of analysis associated with key health indicators
+        for indicator in key_indicators:
+            if indicator in report_text:
+                # Find any mentions of this indicator in the analysis
+                if indicator in analysis.lower():
+                    # Store this learning in knowledge base
+                    if indicator not in st.session_state.knowledge_base:
+                        st.session_state.knowledge_base[indicator] = {}
+                    
+                    if patient_profile not in st.session_state.knowledge_base[indicator]:
+                        st.session_state.knowledge_base[indicator][patient_profile] = []
