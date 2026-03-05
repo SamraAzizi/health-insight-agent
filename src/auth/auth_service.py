@@ -53,8 +53,7 @@ class AuthService:
                             st.session_state.auth_token = session.access_token
                             st.session_state.refresh_token = session.refresh_token
                             st.session_state.user = user_data
-
-                            except Exception:
+        except Exception:
             # If restoration fails, continue without session
             pass
 
@@ -145,3 +144,136 @@ class AuthService:
         try:
             self.supabase.auth.sign_out()
         except Exception:
+            pass
+
+        try:
+            from auth.session_manager import SessionManager
+
+            SessionManager.clear_session_state()
+            return True, None
+        except Exception as e:
+            return False, str(e)
+
+    def get_user(self):
+        try:
+            return self.supabase.auth.get_user()
+        except Exception:
+            return None
+
+    def create_session(self, user_id, title=None):
+        try:
+            current_time = datetime.now()
+            default_title = f"{current_time.strftime('%d-%m-%Y')} | {current_time.strftime('%H:%M:%S')}"
+
+            session_data = {
+                "user_id": user_id,
+                "title": title or default_title,
+                "created_at": current_time.isoformat(),
+            }
+            result = self.supabase.table("chat_sessions").insert(session_data).execute()
+            return True, result.data[0] if result.data else None
+        except Exception as e:
+            return False, str(e)
+
+    def get_user_sessions(self, user_id):
+        try:
+            result = (
+                self.supabase.table("chat_sessions")
+                .select("*")
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+                .execute()
+            )
+            return True, result.data
+        except Exception as e:
+            st.error(f"Error fetching sessions: {str(e)}")
+            return False, []
+
+    def save_chat_message(self, session_id, content, role="user"):
+        try:
+            message_data = {
+                "session_id": session_id,
+                "content": content,
+                "role": role,
+                "created_at": datetime.now().isoformat(),
+            }
+            result = self.supabase.table("chat_messages").insert(message_data).execute()
+            return True, result.data[0] if result.data else None
+        except Exception as e:
+            return False, str(e)
+
+    def get_session_messages(self, session_id):
+        try:
+            result = (
+                self.supabase.table("chat_messages")
+                .select("*")
+                .eq("session_id", session_id)
+                .order("created_at")
+                .execute()
+            )
+            return True, result.data
+        except Exception as e:
+            return False, str(e)
+
+    def delete_session(self, session_id):
+        try:
+            self.supabase.table("chat_messages").delete().eq(
+                "session_id", session_id
+            ).execute()
+
+            self.supabase.table("chat_sessions").delete().eq("id", session_id).execute()
+
+            return True, None
+        except Exception as e:
+            st.error(f"Failed to delete session: {str(e)}")
+            return False, str(e)
+
+    def validate_session_token(self):
+        """Validate existing session token on startup."""
+        try:
+            session = self.supabase.auth.get_session()
+            if not session or not session.access_token:
+                # If no session in Supabase client, but we have tokens in state, try to set session again
+                if (
+                    "auth_token" in st.session_state
+                    and "refresh_token" in st.session_state
+                ):
+                    try:
+                        self.supabase.auth.set_session(
+                            st.session_state.auth_token, st.session_state.refresh_token
+                        )
+                        session = self.supabase.auth.get_session()
+                    except Exception:
+                        pass
+
+            if not session or not session.access_token:
+                return None
+
+            # Relaxed validation: If we have a valid Supabase session, update our state instead of failing
+            # This handles token refreshes or slight mismatches
+            if session.access_token != st.session_state.get("auth_token"):
+                st.session_state.auth_token = session.access_token
+                if session.refresh_token:
+                    st.session_state.refresh_token = session.refresh_token
+
+            user = self.supabase.auth.get_user()
+            if not user or not user.user:
+                return None
+
+            return self.get_user_data(user.user.id)
+        except Exception:
+            return None
+
+    def get_user_data(self, user_id):
+        """Get user data from database."""
+        try:
+            response = (
+                self.supabase.table("users")
+                .select("*")
+                .eq("id", user_id)
+                .single()
+                .execute()
+            )
+            return response.data if response else None
+        except Exception:
+            return None
