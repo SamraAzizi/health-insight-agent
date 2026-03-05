@@ -53,3 +53,95 @@ class AuthService:
                             st.session_state.auth_token = session.access_token
                             st.session_state.refresh_token = session.refresh_token
                             st.session_state.user = user_data
+
+                            except Exception:
+            # If restoration fails, continue without session
+            pass
+
+    def validate_email(self, email):
+        """Validate email format."""
+        pattern = r"^[\w\.-]+@[\w\.-]+\.\w+$"
+        return bool(re.match(pattern, email))
+
+    def check_existing_user(self, email):
+        """Check if user already exists."""
+        try:
+            result = (
+                self.supabase.table("users").select("id").eq("email", email).execute()
+            )
+            return len(result.data) > 0
+        except Exception:
+            return False
+
+    def sign_up(self, email, password, name):
+        try:
+            auth_response = self.supabase.auth.sign_up(
+                {
+                    "email": email,
+                    "password": password,
+                    "options": {"data": {"name": name}},
+                }
+            )
+
+            if not auth_response.user:
+                return False, "Failed to create user account"
+
+            user_data = {
+                "id": auth_response.user.id,
+                "email": email,
+                "name": name,
+                "created_at": datetime.now().isoformat(),
+            }
+
+            # Insert user data into users table
+            self.supabase.table("users").insert(user_data).execute()
+
+            # If we got a session immediately (email confirmation off), store it
+            if auth_response.session:
+                st.session_state.auth_token = auth_response.session.access_token
+                st.session_state.refresh_token = auth_response.session.refresh_token
+                st.session_state.user = user_data
+
+            return True, user_data
+
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "duplicate" in error_msg or "already registered" in error_msg:
+                return False, "Email already registered"
+            return False, f"Sign up failed: {str(e)}"
+
+    def sign_in(self, email, password):
+        try:
+            # Clear any existing session data first
+            # But don't call sign_out() which destroys auth_service in session_state
+            # Just clear the supabase client session locally
+            try:
+                self.supabase.auth.sign_out()
+            except Exception:
+                pass
+
+            auth_response = self.supabase.auth.sign_in_with_password(
+                {"email": email, "password": password}
+            )
+
+            if auth_response and auth_response.user:
+                # Get user data
+                user_data = self.get_user_data(auth_response.user.id)
+                if not user_data:
+                    return False, "User data not found"
+
+                # Store session info
+                st.session_state.auth_token = auth_response.session.access_token
+                st.session_state.refresh_token = auth_response.session.refresh_token
+                st.session_state.user = user_data
+                return True, user_data
+
+            return False, "Invalid login response"
+        except Exception as e:
+            return False, str(e)
+
+    def sign_out(self):
+        """Sign out and clear all session data."""
+        try:
+            self.supabase.auth.sign_out()
+        except Exception:
