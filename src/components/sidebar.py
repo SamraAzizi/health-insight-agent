@@ -1,138 +1,132 @@
 import streamlit as st
-from config.prompts import SPECIALIST_PROMPTS
-from utils.pdf_extractor import extract_text_from_pdf
-from config.sample_data import SAMPLE_REPORT
-from config.app_config import MAX_UPLOAD_SIZE_MB
+from auth.session_manager import SessionManager
+from components.footer import show_footer
+from config.app_config import ANALYSIS_DAILY_LIMIT
 
+def show_sidebar():
+    with st.sidebar:
+        st.title("💬 Chat Sessions")
+        
+        if st.button("+ New Analysis Session", use_container_width=True):
+            if st.session_state.user and 'id' in st.session_state.user:
+                success, session = SessionManager.create_chat_session()
+                if success:
+                    st.session_state.current_session = session
+                    st.rerun()
+                else:
+                    st.error("Failed to create session")
+            else:
+                st.error("Please log in again")
+                SessionManager.logout()
+                st.rerun()
 
-def show_analysis_form():
-    # Initialize report source in session state for new sessions
-    if (
-        "current_session" in st.session_state
-        and "report_source" not in st.session_state
-    ):
-        st.session_state.report_source = "Upload PDF"
-
-    report_source = st.radio(
-        "Choose report source",
-        ["Upload PDF", "Use Sample PDF"],
-        index=0 if st.session_state.get("report_source") == "Upload PDF" else 1,
-        horizontal=True,
-        key="report_source",
-    )
-
-    pdf_contents = get_report_contents(report_source)
-
-    if pdf_contents:  # Only show form if we have report content
-        render_patient_form(pdf_contents)
-
-
-def get_report_contents(report_source):
-    if report_source == "Upload PDF":
-        uploaded_file = st.file_uploader(
-            f"Upload blood report PDF (Max {MAX_UPLOAD_SIZE_MB}MB)",
-            type=["pdf"],
-            help=f"Maximum file size: {MAX_UPLOAD_SIZE_MB}MB. Only PDF files containing medical reports are supported",
-        )
-        if uploaded_file:
-            # Check file size before processing
-            file_size_mb = uploaded_file.size / (1024 * 1024)  # Convert to MB
-            if file_size_mb > MAX_UPLOAD_SIZE_MB:
-                st.error(
-                    f"File size ({file_size_mb:.1f}MB) exceeds the {MAX_UPLOAD_SIZE_MB}MB limit."
-                )
-                return None
-
-            if uploaded_file.type != "application/pdf":
-                st.error("Please upload a valid PDF file.")
-                return None
-
-            pdf_contents = extract_text_from_pdf(uploaded_file)
-            if isinstance(pdf_contents, str) and (
-                pdf_contents.startswith(
-                    ("File size exceeds", "Invalid file type", "Error validating")
-                )
-                or pdf_contents.startswith("The uploaded file")
-                or "error" in pdf_contents.lower()
-            ):
-                st.error(pdf_contents)
-                return None
-            with st.expander("View Extracted Report"):
-                st.text(pdf_contents)
-            return pdf_contents
-    else:
-        with st.expander("View Sample Report"):
-            st.text(SAMPLE_REPORT)
-        return SAMPLE_REPORT
-    return None
-
-
-def render_patient_form(pdf_contents):
-    with st.form("analysis_form"):
-        patient_name = st.text_input("Patient Name")
-        col1, col2 = st.columns(2)
-        with col1:
-            age = st.number_input("Age", min_value=0, max_value=120)
-        with col2:
-            gender = st.selectbox("Gender", ["Male", "Female", "Other"])
-
-        if st.form_submit_button("Analyze Report"):
-            handle_form_submission(patient_name, age, gender, pdf_contents)
-
-
-def handle_form_submission(patient_name, age, gender, pdf_contents):
-    if not all([patient_name, age, gender]):
-        st.error("Please fill in all fields")
-        return
-
-    # Check rate limit first, outside of spinner
-    from services.ai_service import generate_analysis
-
-    can_analyze, error_msg = generate_analysis(None, None, check_only=True)
-    if not can_analyze:
-        st.error(error_msg)
-        st.stop()
-        return
-
-    with st.spinner("Analyzing report..."):
-        # Save report content for follow-up chat (session state for immediate use)
-        st.session_state.current_report_text = pdf_contents
-
-        # Save user message and proceed with analysis
-        st.session_state.auth_service.save_chat_message(
-            st.session_state.current_session["id"],
-            f"Analyzing report for patient: {patient_name}",
+        # Add analysis counter
+        if 'analysis_count' not in st.session_state:
+            st.session_state.analysis_count = 0
+        
+        remaining = ANALYSIS_DAILY_LIMIT - st.session_state.analysis_count
+        st.markdown(
+            f"""
+            <div style='
+                padding: 0.5rem;
+                border-radius: 0.5rem;
+                background: rgba(100, 181, 246, 0.1);
+                margin: 0.5rem 0;
+                text-align: center;
+                font-size: 0.9em;
+            '>
+                <p style='margin: 0; color: #666;'>Daily Analysis Limit</p>
+                <p style='
+                    margin: 0.2rem 0 0 0;
+                    color: {"#1976D2" if remaining > 3 else "#FF4B4B"};
+                    font-weight: 500;
+                '>
+                    {remaining}/{ANALYSIS_DAILY_LIMIT} remaining
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
-        # Generate analysis
-        result = generate_analysis(
-            {
-                "patient_name": patient_name,
-                "age": age,
-                "gender": gender,
-                "report": pdf_contents,
-            },
-            SPECIALIST_PROMPTS["comprehensive_analyst"],
-        )
-
-        if result["success"]:
-            # Store report text as a system message for persistence
-            # This allows us to retrieve it later even after page refresh
-            report_metadata = f"__REPORT_TEXT__\n{pdf_contents}\n__END_REPORT_TEXT__"
-            st.session_state.auth_service.save_chat_message(
-                st.session_state.current_session["id"], report_metadata, role="system"
-            )
-
-            # Add model used information if available
-            content = result["content"]
-            if "model_used" in result:
-                model_info = f"\n\n*Analysis generated using {result['model_used']}*"
-                content += model_info
-
-            st.session_state.auth_service.save_chat_message(
-                st.session_state.current_session["id"], content, role="assistant"
-            )
+        st.markdown("---")
+        show_session_list()
+        
+        # Logout button
+        st.markdown("---")
+        if st.button("Logout", use_container_width=True):
+            SessionManager.logout()
             st.rerun()
-        else:
-            st.error(result["error"])
-            st.stop()
+        
+        # Add footer to sidebar
+        show_footer(in_sidebar=True)
+
+def show_session_list():
+    if st.session_state.user and 'id' in st.session_state.user:
+        success, sessions = SessionManager.get_user_sessions()
+        if success:
+            if sessions:
+                st.subheader("Previous Sessions")
+                render_session_list(sessions)
+            else:
+                st.info("No previous sessions")
+
+def render_session_list(sessions):
+    # Store deletion state
+    if 'delete_confirmation' not in st.session_state:
+        st.session_state.delete_confirmation = None
+    
+    for session in sessions:
+        render_session_item(session)
+
+def render_session_item(session):
+    if not session or not isinstance(session, dict) or 'id' not in session:
+        return
+        
+    session_id = session['id']
+    current_session = st.session_state.get('current_session', {})
+    current_session_id = current_session.get('id') if isinstance(current_session, dict) else None
+    
+    # Create container for each session
+    with st.container():
+        # Session title and delete button side by side
+        title_col, delete_col = st.columns([4, 1])
+        
+        with title_col:
+            if st.button(f"📝 {session['title']}", key=f"session_{session_id}", use_container_width=True):
+                st.session_state.current_session = session
+                st.rerun()
+        
+        with delete_col:
+            if st.button("🗑️", key=f"delete_{session_id}", help="Delete this session"):
+                if st.session_state.delete_confirmation == session_id:
+                    st.session_state.delete_confirmation = None
+                else:
+                    st.session_state.delete_confirmation = session_id
+                st.rerun()
+        
+        # Show confirmation below if this session is being deleted
+        if st.session_state.delete_confirmation == session_id:
+            st.warning("Delete above session?")
+            left_btn, right_btn = st.columns(2)
+            with left_btn:
+                if st.button("Yes", key=f"confirm_delete_{session_id}", type="primary", use_container_width=True):
+                    handle_delete_confirmation(session_id, current_session_id)
+            with right_btn:
+                if st.button("No", key=f"cancel_delete_{session_id}", use_container_width=True):
+                    st.session_state.delete_confirmation = None
+                    st.rerun()
+
+def handle_delete_confirmation(session_id, current_session_id):
+    if not session_id:
+        st.error("Invalid session")
+        return
+        
+    success, error = SessionManager.delete_session(session_id)
+    if success:
+        st.session_state.delete_confirmation = None
+        # Clear current session if it was deleted
+        if current_session_id and current_session_id == session_id:
+            st.session_state.current_session = None
+        st.rerun()
+    else:
+        st.error(f"Failed to delete: {error}")
