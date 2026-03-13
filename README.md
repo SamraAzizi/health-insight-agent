@@ -5,7 +5,8 @@ AI Agent to analyze blood reports and provide detailed health insights.
 
 ## features
 - Agent-based architecture
-    - Analysis Agent: Report analysis with in-context learning from  - - previous analyses and a built-in knowledge base
+    - Analysis Agent: Report analysis with in-context learning from
+    - previous analyses and a built-in knowledge base
 Chat Agent: RAG-powered follow-up Q&A over your report (FAISS + HuggingFace embeddings)
 - Multi-model cascade via Groq with automatic fallback (primary → secondary → tertiary → fallback)
 - Chat sessions: Create multiple analysis sessions; each session stores report, analysis, and follow-up messages in Supabase
